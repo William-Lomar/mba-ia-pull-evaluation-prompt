@@ -29,36 +29,62 @@ foi ensinar o padrão de resposta, sem fornecer as respostas dos casos usados
 para medir a qualidade do prompt. Os resultados da primeira avaliação após
 essa alteração estão documentados na Seção B.
 
+### Segunda técnica: Chain of Thought (CoT)
+
+Após a queda das médias na avaliação com few-shot, a segunda estratégia foi
+orientar uma **análise interna em etapas (CoT)** antes da geração da User Story.
+Nesta iteração, os exemplos few-shot foram removidos do prompt ativo, e as
+instruções passaram a guiar a identificação do usuário afetado, a distinção
+entre comportamento observado e esperado, a cobertura de todos os problemas,
+a elaboração dos critérios de aceitação e a revisão da resposta.
+
+O objetivo é reduzir omissões e inconsistências, especialmente nos relatos
+com múltiplos problemas. Por exemplo, em um bug que envolve duplicidade de
+reservas e divergência de horário, o modelo é orientado a verificar critérios
+para os dois comportamentos antes de finalizar a User Story.
+
+A análise deve ocorrer internamente; a saída contém somente a User Story,
+os critérios de aceitação e as seções complementares necessárias. Informações
+essenciais ausentes são registradas como pontos a esclarecer, sem inventar
+requisitos ou soluções. A avaliação desta versão está registrada na Seção B,
+junto dos resultados e dos prompts das iterações anteriores.
+
 ## B) Resultados Finais
 
-Comparação entre o prompt original (baseline v1) e a primeira otimização v2,
-com aplicação de **few-shot**. Os valores abaixo foram transcritos das médias
-exibidas no cabeçalho dos prints do LangSmith, na escala de 0 a 1.
+Comparação entre o prompt original (baseline v1), a primeira otimização com
+**few-shot (v2)** e a segunda otimização com **CoT (v3)**, na escala de 0 a 1.
+Os valores de v1 e v2 foram transcritos das médias exibidas no cabeçalho dos
+prints. Como o cabeçalho de v3 mostra `-- AVG`, suas médias foram calculadas
+a partir dos scores dos 15 exemplos visíveis no print.
 
-| Métrica | Original (v1) | Após few-shot (v2) | Meta ≥ 0,80 na v2 |
-| --- | ---: | ---: | :---: |
-| Helpfulness | 0,88 | 0,75 | Não |
-| Correctness | 0,82 | 0,69 | Não |
-| F1-Score | 0,76 | 0,69 | Não |
-| Clarity | 0,88 | 0,80 | Sim |
-| Precision | 0,88 | 0,70 | Não |
-| **Média das cinco métricas exibidas** | **0,844** | **0,726** | **Não** |
+| Métrica | Original (v1) | Few-shot (v2) | CoT (v3) | Meta ≥ 0,80 na v3 |
+| --- | ---: | ---: | ---: | :---: |
+| Helpfulness | 0,88 | 0,75 | 0,8203 | Sim |
+| Correctness | 0,82 | 0,69 | 0,7494 | Não |
+| F1-Score | 0,76 | 0,69 | 0,6980 | Não |
+| Clarity | 0,88 | 0,80 | 0,8400 | Sim |
+| Precision | 0,88 | 0,70 | 0,8007 | Sim |
+| **Média das cinco métricas** | **0,844** | **0,726** | **0,7817** | **Não** |
 
-A média geral da tabela foi calculada a partir dos valores arredondados dos
-prints; ela pode diferir da média calculada com os scores completos.
+As médias calculadas usam os valores arredondados dos prints e podem diferir
+dos resultados calculados com os scores completos. As médias de v3 e sua média
+geral foram arredondadas para quatro casas decimais.
 A aprovação exige que **todas as cinco métricas** atinjam pelo menos 0,80.
 O prompt original não atingiu a meta de F1-Score. Após o few-shot, apenas Clarity
 atingiu a meta, e as cinco médias ficaram abaixo dos resultados originais.
-Portanto, **esta primeira otimização ainda não atende ao critério de aprovação**.
-Os resultados desta execução não demonstram ganho com a alteração; novas
-iterações e avaliações são necessárias para verificar a melhoria do prompt.
+Com CoT, as cinco médias melhoraram em relação aos valores exibidos para
+few-shot, e Helpfulness, Clarity e Precision atingiram a meta. A média geral
+passou de 0,726 para aproximadamente 0,7817, mas Correctness e F1-Score ainda
+ficaram abaixo de 0,80. Portanto, **a versão com CoT ainda não atende ao critério
+de aprovação** e permanece abaixo do prompt original nas cinco médias.
 
 ### Evidências das avaliações
 
-Os dois experimentos aparecem nos prints com o nome `bug_to_user_story_v2`.
+Os três experimentos aparecem nos prints com o nome `bug_to_user_story_v2`.
 Nesta comparação, “v1” identifica o resultado original do arquivo
 `v1-original.png`, e “v2” identifica o resultado após a otimização do arquivo
-`v2.png`; são rótulos das etapas, não nomes distintos publicados no Hub.
+`v2-few-shot.png`. “v3” identifica a avaliação com CoT do arquivo `v3-CoT.png`.
+São rótulos das etapas, não nomes distintos publicados no Hub.
 
 **Prompt original — experimento `bug_to_user_story_v2-68908fbc`:**
 
@@ -187,11 +213,64 @@ Relato de Bug:
 ---
 ```
 
-![Avaliação do prompt após a otimização com few-shot no LangSmith](v2.png)
+![Avaliação do prompt após a otimização com few-shot no LangSmith](v2-few-shot.png)
 
-**Link público do dashboard:** ainda não informado. Os prints documentam os
-resultados atuais; para completar a Seção B, falta incluir o link público do
-LangSmith e uma avaliação que atinja a meta de 0,80 em todas as métricas.
+**Após CoT (v3) — experimento `bug_to_user_story_v2-dc5e5a3a`:**
+
+**Mensagem de sistema (`system_prompt`):**
+
+```text
+Você é um assistente que ajuda a transformar relatos de bugs de usuários
+em tarefas para desenvolvedores.
+
+Converta o relato recebido em uma User Story em português. Antes de redigir,
+analise internamente o relato em etapas:
+
+1. Identifique quem é afetado, em qual situação o problema ocorre e qual
+   impacto impede essa pessoa de alcançar seu objetivo.
+2. Diferencie o comportamento observado do comportamento esperado.
+   Preserve condições de reprodução, plataformas, valores e restrições
+   relevantes fornecidos no relato.
+3. Identifique todos os problemas descritos e o resultado esperado para
+   cada um. Se houver múltiplos problemas, agrupe os critérios por problema
+   para que nenhum seja omitido.
+4. Formule a necessidade do usuário e seu benefício no padrão
+   "Como... eu quero... para que...", focando no comportamento desejado.
+5. Converta cada resultado esperado em critérios de aceitação verificáveis
+   no padrão "Dado que... Quando... Então... E...".
+6. Confira se a resposta cobre os problemas e detalhes relevantes do relato,
+   sem acrescentar requisitos ou soluções não sustentados pelas informações
+   recebidas. Revise inconsistências antes de entregar a resposta final.
+
+Use apenas as informações do relato. Não invente causas, tecnologias,
+endpoints, metas numéricas ou regras de negócio não informadas. Se faltar
+uma informação essencial, registre-a brevemente em "Pontos a esclarecer"
+em vez de assumir um valor ou uma solução.
+
+Ajuste o nível de detalhe à complexidade do bug. Inclua "Contexto Técnico"
+apenas quando o relato fornecer informações técnicas relevantes, mantendo
+clara a diferença entre o sintoma observado e uma causa comprovada.
+
+Retorne somente a resposta final em Markdown, com:
+- User Story no padrão "Como... eu quero... para que...".
+- Critérios de Aceitação verificáveis, agrupados quando necessário.
+- Contexto Técnico, quando houver informações técnicas no relato.
+- Pontos a esclarecer, somente quando houver lacunas essenciais.
+
+Não inclua a análise interna, a sequência de raciocínio ou comentários
+sobre como a resposta foi produzida.
+```
+
+**Mensagem do usuário (`user_prompt`):**
+
+```text
+Relato de Bug:
+---
+{bug_report}
+---
+```
+
+![Avaliação do prompt após a otimização com CoT no LangSmith](v3-CoT.png)
 
 C) Seção "Como Executar":
 
