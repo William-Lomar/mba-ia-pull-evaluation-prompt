@@ -3,11 +3,11 @@ Script COMPLETO para avaliar prompts otimizados.
 
 Este script:
 1. Carrega dataset de avaliação de arquivo .jsonl (datasets/bug_to_user_story.jsonl)
-2. Cria/atualiza dataset no LangSmith
+2. Cria dataset no LangSmith ou reutiliza o existente
 3. Puxa prompts otimizados do LangSmith Hub (fonte única de verdade)
 4. Executa prompts contra o dataset
 5. Calcula 5 métricas (Helpfulness, Correctness, F1-Score, Clarity, Precision)
-6. Publica resultados no dashboard do LangSmith
+6. Cria um experimento e publica respostas, métricas e justificativas no LangSmith
 7. Exibe resumo no terminal
 
 Suporta múltiplos providers de LLM:
@@ -24,6 +24,7 @@ from typing import List, Dict, Any
 from pathlib import Path
 from dotenv import load_dotenv
 from langsmith import Client
+from langsmith.schemas import Run, Example
 from langchain import hub
 from langchain_core.prompts import ChatPromptTemplate
 from utils import check_env_vars, format_score, print_section_header, get_llm as get_configured_llm
@@ -67,8 +68,7 @@ def create_evaluation_dataset(client: Client, dataset_name: str, jsonl_path: str
     examples = load_dataset_from_jsonl(jsonl_path)
 
     if not examples:
-        print("❌ Nenhum exemplo carregado do arquivo .jsonl")
-        return dataset_name
+        raise ValueError("Nenhum exemplo carregado do arquivo .jsonl")
 
     print(f"   ✓ Carregados {len(examples)} exemplos do arquivo {jsonl_path}")
 
@@ -98,8 +98,7 @@ def create_evaluation_dataset(client: Client, dataset_name: str, jsonl_path: str
             return dataset_name
 
     except Exception as e:
-        print(f"   ⚠️  Erro ao criar dataset: {e}")
-        return dataset_name
+        raise RuntimeError(f"Não foi possível preparar o dataset '{dataset_name}'") from e
 
 
 def pull_prompt_from_langsmith(prompt_name: str) -> ChatPromptTemplate:
@@ -140,42 +139,65 @@ def pull_prompt_from_langsmith(prompt_name: str) -> ChatPromptTemplate:
         raise
 
 
-def evaluate_prompt_on_example(
-    prompt_template: ChatPromptTemplate,
-    example: Any,
-    llm: Any
-) -> Dict[str, Any]:
-    try:
-        inputs = example.inputs if hasattr(example, 'inputs') else {}
-        outputs = example.outputs if hasattr(example, 'outputs') else {}
+METRIC_NAMES = ("helpfulness", "correctness", "f1_score", "clarity", "precision")
 
-        chain = prompt_template | llm
 
-        response = chain.invoke(inputs)
-        answer = response.content
+def evaluate_metrics(run: Run, example: Example) -> Dict[str, Any]:
+    """Retorna feedback por exemplo, no formato aceito pelo SDK do LangSmith."""
+    answer = (run.outputs or {}).get("answer", "")
+    if run.error or not answer:
+        raise ValueError("A geração falhou ou retornou uma resposta vazia")
 
-        reference = outputs.get("reference", "") if isinstance(outputs, dict) else ""
+    inputs = example.inputs
+    reference = (example.outputs or {}).get("reference", "")
+    question = inputs.get("question", inputs.get("bug_report", inputs.get("pr_title", "N/A")))
 
-        if isinstance(inputs, dict):
-            question = inputs.get("question", inputs.get("bug_report", inputs.get("pr_title", "N/A")))
-        else:
-            question = "N/A"
+    f1 = evaluate_f1_score(question, answer, reference)
+    clarity = evaluate_clarity(question, answer, reference)
+    precision = evaluate_precision(question, answer, reference)
 
-        return {
-            "answer": answer,
-            "reference": reference,
-            "question": question
-        }
+    return {
+        "results": [
+            {"key": "f1_score", "score": f1["score"], "comment": f1.get("reasoning", "")},
+            {"key": "clarity", "score": clarity["score"], "comment": clarity.get("reasoning", "")},
+            {"key": "precision", "score": precision["score"], "comment": precision.get("reasoning", "")},
+            {
+                "key": "helpfulness",
+                "score": round((clarity["score"] + precision["score"]) / 2, 4),
+                "comment": "Métrica derivada: (clarity + precision) / 2",
+            },
+            {
+                "key": "correctness",
+                "score": round((f1["score"] + precision["score"]) / 2, 4),
+                "comment": "Métrica derivada: (f1_score + precision) / 2",
+            },
+        ]
+    }
 
-    except Exception as e:
-        print(f"      ⚠️  Erro ao avaliar exemplo: {e}")
-        import traceback
-        print(f"      Traceback: {traceback.format_exc()}")
-        return {
-            "answer": "",
-            "reference": "",
-            "question": ""
-        }
+
+def summarize_experiment(results: Any) -> Dict[str, float]:
+    """Calcula médias a partir dos mesmos feedbacks publicados no experimento."""
+    scores = {name: [] for name in METRIC_NAMES}
+    failed_count = 0
+    count = 0
+    for count, row in enumerate(results, 1):
+        feedback = {item.key: item.score for item in row["evaluation_results"]["results"]}
+        if row["run"].error or any(feedback.get(name) is None for name in METRIC_NAMES):
+            failed_count += 1
+            print(f"      [{count}] Erro na geração ou avaliação; consulte o experimento")
+            continue
+        for name in METRIC_NAMES:
+            scores[name].append(feedback[name])
+        print(
+            f"      [{count}] F1:{feedback['f1_score']:.2f} "
+            f"Clarity:{feedback['clarity']:.2f} Precision:{feedback['precision']:.2f}"
+        )
+
+    if not count:
+        raise ValueError("O experimento não contém exemplos avaliados")
+    if failed_count:
+        raise RuntimeError(f"{failed_count}/{count} exemplos falharam; o experimento está incompleto")
+    return {name: round(sum(values) / len(values), 4) for name, values in scores.items()}
 
 
 def evaluate_prompt(
@@ -184,59 +206,46 @@ def evaluate_prompt(
     client: Client
 ) -> Dict[str, float]:
     print(f"\n🔍 Avaliando: {prompt_name}")
+    prompt_template = pull_prompt_from_langsmith(prompt_name)
+    examples = list(client.list_examples(dataset_name=dataset_name))
+    if not examples:
+        raise ValueError(f"Dataset '{dataset_name}' vazio")
+    print(f"   Dataset: {len(examples)} exemplos")
 
+    chain = prompt_template | get_llm()
+
+    def predict(inputs: Dict[str, Any]) -> Dict[str, Any]:
+        answer = chain.invoke(inputs).content
+        if not answer:
+            raise ValueError("O modelo retornou uma resposta vazia")
+        return {"answer": answer}
+
+    experiment_prefix = os.getenv("LANGSMITH_EXPERIMENT_PREFIX") or prompt_name.rsplit("/", 1)[-1]
+    results = client.evaluate(
+        predict,
+        data=examples,
+        evaluators=[evaluate_metrics],
+        experiment_prefix=experiment_prefix,
+        description=f"Avaliação do prompt {prompt_name} com cinco métricas de qualidade",
+        metadata={
+            "prompt_name": prompt_name,
+            "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
+            "llm_model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
+            "eval_model": os.getenv("EVAL_MODEL", "gpt-4o"),
+        },
+        max_concurrency=0,
+        blocking=True,
+        upload_results=True,
+    )
+    print(f"\n   ✓ Experimento: {results.experiment_name}")
     try:
-        prompt_template = pull_prompt_from_langsmith(prompt_name)
-
-        examples = list(client.list_examples(dataset_name=dataset_name))
-        print(f"   Dataset: {len(examples)} exemplos")
-
-        llm = get_llm()
-
-        f1_scores = []
-        clarity_scores = []
-        precision_scores = []
-
-        print("   Avaliando exemplos...")
-
-        for i, example in enumerate(examples, 1):
-            result = evaluate_prompt_on_example(prompt_template, example, llm)
-
-            if result["answer"]:
-                f1 = evaluate_f1_score(result["question"], result["answer"], result["reference"])
-                clarity = evaluate_clarity(result["question"], result["answer"], result["reference"])
-                precision = evaluate_precision(result["question"], result["answer"], result["reference"])
-
-                f1_scores.append(f1["score"])
-                clarity_scores.append(clarity["score"])
-                precision_scores.append(precision["score"])
-
-                print(f"      [{i}/{len(examples)}] F1:{f1['score']:.2f} Clarity:{clarity['score']:.2f} Precision:{precision['score']:.2f}")
-
-        avg_f1 = sum(f1_scores) / len(f1_scores) if f1_scores else 0.0
-        avg_clarity = sum(clarity_scores) / len(clarity_scores) if clarity_scores else 0.0
-        avg_precision = sum(precision_scores) / len(precision_scores) if precision_scores else 0.0
-
-        avg_helpfulness = (avg_clarity + avg_precision) / 2
-        avg_correctness = (avg_f1 + avg_precision) / 2
-
-        return {
-            "helpfulness": round(avg_helpfulness, 4),
-            "correctness": round(avg_correctness, 4),
-            "f1_score": round(avg_f1, 4),
-            "clarity": round(avg_clarity, 4),
-            "precision": round(avg_precision, 4)
-        }
-
+        experiment = client.read_project(project_name=results.experiment_name)
+        if experiment.url:
+            print(f"   Confira os resultados: {experiment.url}")
     except Exception as e:
-        print(f"   ❌ Erro na avaliação: {e}")
-        return {
-            "helpfulness": 0.0,
-            "correctness": 0.0,
-            "f1_score": 0.0,
-            "clarity": 0.0,
-            "precision": 0.0
-        }
+        print(f"   ⚠️  Não foi possível obter o link do experimento: {e}")
+
+    return summarize_experiment(results)
 
 
 def display_results(prompt_name: str, scores: Dict[str, float]) -> bool:
@@ -305,7 +314,11 @@ def main():
         return 1
 
     dataset_name = f"{project_name}-eval"
-    create_evaluation_dataset(client, dataset_name, jsonl_path)
+    try:
+        create_evaluation_dataset(client, dataset_name, jsonl_path)
+    except Exception as e:
+        print(f"❌ Erro ao preparar dataset: {e}")
+        return 1
 
     print("\n" + "=" * 70)
     print("PROMPTS PARA AVALIAR")
@@ -373,8 +386,7 @@ def main():
 
     if all_passed:
         print("✅ Todos os prompts atingiram todas as métricas >= 0.8!")
-        print(f"\n✓ Confira os resultados em:")
-        print(f"  https://smith.langchain.com/projects/{project_name}")
+        print("\n✓ Consulte os links dos experimentos exibidos acima.")
         print("\nPróximos passos:")
         print("1. Documente o processo no README.md")
         print("2. Capture screenshots das avaliações")
