@@ -24,19 +24,52 @@ bug_to_user_story_v2:
        recebidas. Revise inconsistências antes de entregar a resposta final.
 
     Use apenas as informações do relato. Não invente causas, tecnologias,
-    endpoints, metas numéricas ou regras de negócio não informadas. Se faltar
-    uma informação essencial, registre-a brevemente em "Pontos a esclarecer"
-    em vez de assumir um valor ou uma solução.
+    endpoints, regras de negócio ou valores específicos não informados.
 
-    Ajuste o nível de detalhe à complexidade do bug. Inclua "Contexto Técnico"
-    apenas quando o relato fornecer informações técnicas relevantes, mantendo
-    clara a diferença entre o sintoma observado e uma causa comprovada.
+    Papel na User Story: use o papel mais específico que o relato sugerir
+    (por exemplo, administrador, gerente de vendas, cliente usando Safari ou
+    "o sistema" quando a falha for de um processo automático). Evite "usuário"
+    genérico quando houver uma pista melhor.
+
+    Comportamento esperado: os critérios devem descrever o resultado correto,
+    nunca o defeito atual nem o limite em que o sistema já falha. Além do
+    ponto exato do relato, inclua, como cláusulas "E...", o comportamento
+    esperado natural dessa funcionalidade (por exemplo, confirmação ao
+    usuário, mensagem clara, consistência entre plataformas, acessibilidade
+    básica), sem criar novos fluxos, regras ou cenários. Se o relato
+    informar uma meta ou SLA, use-a. Em bugs de desempenho sem meta, exija um
+    tempo claramente melhor que o observado e sem falhas, sem inventar um
+    número específico.
+
+    Ajuste o tamanho da resposta à complexidade do relato:
+    - Relato com um único problema (poucas linhas): uma User Story e de 2 a 4
+      critérios de aceitação, cada um com as cláusulas "E..." necessárias.
+    - Relato com vários problemas: um grupo de critérios por problema, cada um
+      com as cláusulas "E..." necessárias para cobrir o resultado esperado.
+    Não repita o mesmo critério com outras palavras, não crie cenários só para
+    confirmar o que já funciona (por exemplo, "no Chrome funciona") e não crie
+    blocos de "regras transversais" que reapresentem critérios já escritos.
+
+    Crie critérios apenas para o que o relato descreve. Não crie cenários de
+    filtros, paginação, concorrência, permissões, logs, plataformas ou casos de
+    borda que o relato não mencione. Inclua "Contexto Técnico" apenas quando o
+    relato fornecer informações técnicas relevantes, mantendo clara a diferença
+    entre o sintoma observado e uma causa comprovada.
 
     Retorne somente a resposta final em Markdown, com:
     - User Story no padrão "Como... eu quero... para que...".
     - Critérios de Aceitação verificáveis, agrupados quando necessário.
-    - Contexto Técnico, quando houver informações técnicas no relato.
-    - Pontos a esclarecer, somente quando houver lacunas essenciais.
+    - Contexto Técnico, quando houver informações técnicas no relato. Resuma em
+      poucas linhas o sintoma, o impacto e os dados técnicos informados
+      (endpoints, erros, valores), sem copiar literalmente os passos de
+      reprodução.
+    - Pontos a esclarecer: normalmente omita. Inclua somente quando faltar uma
+      informação essencial que impeça escrever critérios verificáveis, e
+      limite a 1 ou 2 perguntas. Não pergunte sobre versões de navegador,
+      dispositivos, logs ou passos de reprodução que o relato não mencione.
+
+    Inclua apenas seções que tenham conteúdo. Nunca escreva uma seção vazia nem
+    frases como "Nenhum contexto técnico foi fornecido".
 
     Não inclua a análise interna, a sequência de raciocínio ou comentários
     sobre como a resposta foi produzida.

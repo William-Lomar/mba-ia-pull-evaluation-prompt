@@ -109,6 +109,69 @@ Por ser um modelo de raciocínio, o `gpt-5-mini` só aceita `temperature=1`; o
 `gpt-5*`, `o1`, `o3` e `o4`. O resultado vem de uma única execução e, com
 `temperature=1`, pode variar entre rodadas.
 
+### Refinamento do prompt (v5) e aprovação com `gpt-5-mini`
+
+A partir da análise das respostas mais fracas, o prompt CoT foi refinado em duas
+etapas, avaliadas com o `gpt-4o-mini` e, na versão final, também com o
+`gpt-5-mini`. O modelo de avaliação permaneceu `gpt-4o`.
+
+**Etapa 1 — corte de excessos (experimento `bug-to-user-story-v4-gpt4o-mini`):**
+limites de tamanho por complexidade do relato, proibição de cenários não citados
+(filtros, paginação, concorrência, logs) e seções sem conteúdo ou com texto de
+preenchimento. Efeito pequeno com o `gpt-4o-mini`, que já respondia de forma
+curta: a média foi de 0,7817 para 0,7894. O limite de "no máximo 2 pontos a
+esclarecer" virou cota, e o número de itens subiu de 23 para 29.
+
+**Etapa 2 — foco no que a referência cobra (experimento `bug-to-user-story-v5`):**
+papel específico na User Story em vez de "usuário" genérico, critérios que
+descrevem o resultado correto (e não o limite em que o sistema já falha),
+cláusulas "E..." com o comportamento esperado natural da funcionalidade, 2 a 4
+critérios por problema e "Pontos a esclarecer" apenas quando essencial.
+
+| Métrica | CoT (`gpt-4o-mini`) | Etapa 1 (`gpt-4o-mini`) | v5 (`gpt-4o-mini`) | v5 (`gpt-5-mini`) | Meta ≥ 0,80 |
+| --- | ---: | ---: | ---: | ---: | :---: |
+| Helpfulness | 0,8203 | 0,83 | 0,88 | 0,85 | Sim |
+| Correctness | 0,7494 | 0,75 | 0,81 | 0,82 | Sim |
+| F1-Score | 0,6980 | 0,69 | 0,75 | **0,81** | Sim |
+| Clarity | 0,8400 | 0,87 | 0,89 | 0,86 | Sim |
+| Precision | 0,8007 | 0,80 | 0,87 | 0,83 | Sim |
+| **Média das cinco métricas** | **0,7817** | **0,7894** | **0,8370** | **0,8361** | **Sim** |
+
+Com o `gpt-4o-mini`, o v5 já superou a meta de média (0,8370), mas o F1-Score
+ficou em 0,75 e o prompt foi **reprovado**. Com o mesmo prompt e o `gpt-5-mini`,
+o F1-Score passou para 0,81 e as cinco métricas atingiram 0,80 ou mais:
+**aprovado**.
+
+**Achado: a diferença entre os modelos está em seguir instruções negativas.**
+O prompt contém proibições explícitas ("não crie cenários só para confirmar o que
+já funciona", "não pergunte sobre versões de navegador"). Comparando as respostas
+dos dois modelos ao mesmo prompt:
+
+- No bug das imagens do Safari, o `gpt-4o-mini` escreveu um critério extra
+  confirmando que no Chrome as imagens aparecem, exatamente o cenário proibido.
+  O `gpt-5-mini` não o criou.
+- O `gpt-4o-mini` ignorou a proibição no ponto em que ela importava e a levou ao
+  extremo em outro: omitiu "Pontos a esclarecer" nas 15 respostas. O `gpt-5-mini`
+  manteve a seção em 3 delas, onde julgou haver uma lacuna, o que se aproxima
+  mais do "normalmente omita" pedido.
+- As regras negativas não foram seguidas de forma uniforme pelo `gpt-5-mini`: no
+  bug das imagens ele perguntou as versões do Safari, o que o prompt vetava, e,
+  no relatório de vendas, ambos os modelos usaram o limite de 120 s atual como
+  meta, contrariando "nunca o limite em que o sistema já falha". Esses dois
+  exemplos seguiram com F1 em torno de 0,55 a 0,65 nos dois modelos.
+- O `gpt-5-mini` também produziu critérios mais completos (por exemplo, no modal,
+  foco do teclado e bloqueio do menu), em linha com o que as referências
+  cobram.
+
+Portanto, a troca de modelo continuou sendo o que levou o F1 acima de 0,80, mas o
+ganho veio de o modelo de raciocínio seguir melhor as restrições do prompt, e não
+de um prompt diferente.
+
+O custo é o tempo de processamento: nos prints do LangSmith, a latência mediana
+(P50) foi de **19,49 s** por exemplo com o `gpt-5-mini`, contra **2,80 s** com o
+`gpt-4o-mini`, e as respostas do `gpt-5-mini` têm em média 2.694 caracteres,
+contra 1.083.
+
 ### Evidências das avaliações
 
 Os três experimentos aparecem nos prints com o nome `bug_to_user_story_v2`.
@@ -310,6 +373,96 @@ cerca de 12 s a 37 s entre os 15 exemplos, o que evidencia o tempo adicional do
 modelo de raciocínio.
 
 ![Avaliação do prompt CoT com gpt-5-mini no LangSmith](v4-gpt5-mini.png)
+
+**Prompt refinado (v5) — mensagem de sistema (`system_prompt`):**
+
+```text
+Você é um assistente que ajuda a transformar relatos de bugs de usuários
+em tarefas para desenvolvedores.
+
+Converta o relato recebido em uma User Story em português. Antes de redigir,
+analise internamente o relato em etapas:
+
+1. Identifique quem é afetado, em qual situação o problema ocorre e qual
+   impacto impede essa pessoa de alcançar seu objetivo.
+2. Diferencie o comportamento observado do comportamento esperado.
+   Preserve condições de reprodução, plataformas, valores e restrições
+   relevantes fornecidos no relato.
+3. Identifique todos os problemas descritos e o resultado esperado para
+   cada um. Se houver múltiplos problemas, agrupe os critérios por problema
+   para que nenhum seja omitido.
+4. Formule a necessidade do usuário e seu benefício no padrão
+   "Como... eu quero... para que...", focando no comportamento desejado.
+5. Converta cada resultado esperado em critérios de aceitação verificáveis
+   no padrão "Dado que... Quando... Então... E...".
+6. Confira se a resposta cobre os problemas e detalhes relevantes do relato,
+   sem acrescentar requisitos ou soluções não sustentados pelas informações
+   recebidas. Revise inconsistências antes de entregar a resposta final.
+
+Use apenas as informações do relato. Não invente causas, tecnologias,
+endpoints, regras de negócio ou valores específicos não informados.
+
+Papel na User Story: use o papel mais específico que o relato sugerir
+(por exemplo, administrador, gerente de vendas, cliente usando Safari ou
+"o sistema" quando a falha for de um processo automático). Evite "usuário"
+genérico quando houver uma pista melhor.
+
+Comportamento esperado: os critérios devem descrever o resultado correto,
+nunca o defeito atual nem o limite em que o sistema já falha. Além do
+ponto exato do relato, inclua, como cláusulas "E...", o comportamento
+esperado natural dessa funcionalidade (por exemplo, confirmação ao
+usuário, mensagem clara, consistência entre plataformas, acessibilidade
+básica), sem criar novos fluxos, regras ou cenários. Se o relato
+informar uma meta ou SLA, use-a. Em bugs de desempenho sem meta, exija um
+tempo claramente melhor que o observado e sem falhas, sem inventar um
+número específico.
+
+Ajuste o tamanho da resposta à complexidade do relato:
+- Relato com um único problema (poucas linhas): uma User Story e de 2 a 4
+  critérios de aceitação, cada um com as cláusulas "E..." necessárias.
+- Relato com vários problemas: um grupo de critérios por problema, cada um
+  com as cláusulas "E..." necessárias para cobrir o resultado esperado.
+Não repita o mesmo critério com outras palavras, não crie cenários só para
+confirmar o que já funciona (por exemplo, "no Chrome funciona") e não crie
+blocos de "regras transversais" que reapresentem critérios já escritos.
+
+Crie critérios apenas para o que o relato descreve. Não crie cenários de
+filtros, paginação, concorrência, permissões, logs, plataformas ou casos de
+borda que o relato não mencione. Inclua "Contexto Técnico" apenas quando o
+relato fornecer informações técnicas relevantes, mantendo clara a diferença
+entre o sintoma observado e uma causa comprovada.
+
+Retorne somente a resposta final em Markdown, com:
+- User Story no padrão "Como... eu quero... para que...".
+- Critérios de Aceitação verificáveis, agrupados quando necessário.
+- Contexto Técnico, quando houver informações técnicas no relato. Resuma em
+  poucas linhas o sintoma, o impacto e os dados técnicos informados
+  (endpoints, erros, valores), sem copiar literalmente os passos de
+  reprodução.
+- Pontos a esclarecer: normalmente omita. Inclua somente quando faltar uma
+  informação essencial que impeça escrever critérios verificáveis, e
+  limite a 1 ou 2 perguntas. Não pergunte sobre versões de navegador,
+  dispositivos, logs ou passos de reprodução que o relato não mencione.
+
+Inclua apenas seções que tenham conteúdo. Nunca escreva uma seção vazia nem
+frases como "Nenhum contexto técnico foi fornecido".
+
+Não inclua a análise interna, a sequência de raciocínio ou comentários
+sobre como a resposta foi produzida.
+```
+
+A mensagem do usuário (`user_prompt`) é a mesma das versões anteriores.
+
+**v5 com `gpt-4o-mini` — experimento `bug-to-user-story-v5-gpt4o-mini-51812397`:**
+média 0,8370 e F1-Score 0,75 (reprovado). Latência mediana de 2,80 s.
+
+![Avaliação do prompt v5 com gpt-4o-mini no LangSmith](v5-gpt4o-mini.png)
+
+**v5 com `gpt-5-mini` — experimento `bug-to-user-story-v5-gpt5-mini-2e22ef9c`:**
+média 0,8361 e F1-Score 0,81 (aprovado). Latência mediana de 19,49 s. O cabeçalho
+do print mostra `-- AVG`; as médias vêm da execução do `evaluate.py`.
+
+![Avaliação do prompt v5 com gpt-5-mini no LangSmith](v5-gpt5-mini.png)
 
 C) Seção "Como Executar":
 
