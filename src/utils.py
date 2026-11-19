@@ -200,6 +200,10 @@ def get_llm(model: Optional[str] = None, temperature: float = 0.0):
                 "Obtenha uma chave em: https://platform.openai.com/api-keys"
             )
 
+        # Modelos de raciocínio (família gpt-5, o1, o3...) só aceitam temperature=1
+        if model_name.lower().startswith(("gpt-5", "o1", "o3", "o4")):
+            temperature = 1
+
         return ChatOpenAI(
             model=model_name,
             temperature=temperature,

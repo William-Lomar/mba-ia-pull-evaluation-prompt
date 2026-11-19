@@ -78,6 +78,37 @@ passou de 0,726 para aproximadamente 0,7817, mas Correctness e F1-Score ainda
 ficaram abaixo de 0,80. Portanto, **a versão com CoT ainda não atende ao critério
 de aprovação** e permanece abaixo do prompt original nas cinco médias.
 
+### Teste com outro modelo: `gpt-5-mini`
+
+Para verificar se a troca de modelo, sem alterar o prompt, ajudaria a atingir a
+meta, o mesmo prompt `bug_to_user_story_v2` (CoT) foi reavaliado com o
+`gpt-5-mini` como modelo principal. O modelo de avaliação permaneceu `gpt-4o`,
+mantendo a comparação equivalente. O experimento foi registrado no LangSmith com
+o prefixo `bug-to-user-story-v3-gpt5-mini`.
+
+| Métrica | CoT com `gpt-4o-mini` | CoT com `gpt-5-mini` | Meta ≥ 0,80 |
+| --- | ---: | ---: | :---: |
+| Helpfulness | 0,8203 | 0,83 | Sim |
+| Correctness | 0,7494 | 0,80 | Sim |
+| F1-Score | 0,6980 | 0,79 | Não |
+| Clarity | 0,8400 | 0,85 | Sim |
+| Precision | 0,8007 | 0,81 | Sim |
+| **Média das cinco métricas** | **0,7817** | **0,8175** | **Não** |
+
+**Achado:** apenas a mudança de modelo, com o prompt idêntico, elevou a média
+de 0,7817 para 0,8175 e superou a meta de média 0,80. Correctness, que estava
+em 0,7494, passou a atingir a meta, e o F1-Score subiu de 0,6980 para 0,79. A
+aprovação segue pendente porque o F1-Score ficou 0,01 abaixo de 0,80. O ganho
+tem um custo: por ser um modelo de raciocínio, o `gpt-5-mini` consome mais tempo
+de processamento do que o `gpt-4o-mini`. A latência mediana (P50) no
+LangSmith foi de 18,36 s por exemplo (print `v4-gpt5-mini.png`); não há medição
+equivalente registrada para o `gpt-4o-mini`.
+
+Por ser um modelo de raciocínio, o `gpt-5-mini` só aceita `temperature=1`; o
+`get_llm` em `src/utils.py` aplica esse valor automaticamente aos modelos
+`gpt-5*`, `o1`, `o3` e `o4`. O resultado vem de uma única execução e, com
+`temperature=1`, pode variar entre rodadas.
+
 ### Evidências das avaliações
 
 Os três experimentos aparecem nos prints com o nome `bug_to_user_story_v2`.
@@ -271,6 +302,14 @@ Relato de Bug:
 ```
 
 ![Avaliação do prompt após a otimização com CoT no LangSmith](v3-CoT.png)
+
+**CoT com `gpt-5-mini` — experimento `bug-to-user-story-v3-gpt5-mini-185c526d`:**
+
+O print mostra a latência mediana (P50) de 18,36 s por exemplo, com uma faixa de
+cerca de 12 s a 37 s entre os 15 exemplos, o que evidencia o tempo adicional do
+modelo de raciocínio.
+
+![Avaliação do prompt CoT com gpt-5-mini no LangSmith](v4-gpt5-mini.png)
 
 C) Seção "Como Executar":
 
